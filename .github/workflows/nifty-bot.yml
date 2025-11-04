@@ -1,0 +1,35 @@
+name: Nifty Options Trading Bot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    
+    - name: Display IST time
+      run: echo "IST Time:" && TZ='Asia/Kolkata' date
+    
+    - name: Run trading bot
+      run: python main.py
+      timeout-minutes: 390
+    
+    - name: Upload trade logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: trade-logs-${{ github.run_number }}
+        path: nifty_trades.csv
+        retention-days: 30
