@@ -1,10 +1,11 @@
 """
-NIFTY 50 OPTIONS BOT - PRODUCTION VERSION V2
-✅ Strategy: CPR + VWAP + Volume + OI
-✅ Lot Size: 75
-✅ P&L Management (TP: ₹1500, SL: ₹2000, Trailing: ₹500)
-✅ Discord Notifications
-✅ Full Date/Time CSV Logging
+NIFTY 50 OPTIONS BOT - FIXED VERSION V4
+✅ FIXED: OI Logic (CE high = Bullish, PE high = Bearish)
+✅ FIXED: OI Change Tracking (Buildup vs Unwinding)
+✅ FIXED: Volume Window Optimization
+✅ FIXED: Signal Validation with Distance Check
+✅ Enhanced Error Handling
+✅ NEW: Timestamped Folder Structure for Logs & Trades
 """
 
 import requests
@@ -13,26 +14,133 @@ import numpy as np
 import datetime as dt
 import time
 import csv
+import os
+import sys
+import logging
+from logging.handlers import RotatingFileHandler
 
 # ==================== CONFIGURATION ====================
 ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI1NUJBOVgiLCJqdGkiOiI2OTA5NzUxMGM5YzYzZDU4ZWViZjgwZDkiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2MjIyNzQ3MiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzYyMjkzNjAwfQ.ZqO_xW_7ShNalpapEdzocZy6sdRlqZdeLPUhTWXDYG8"
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1412386951474057299/Jgft_nxzGxcfWOhoLbSWMde-_bwapvqx8l3VQGQwEoR7_8n4b9Q9zN242kMoXsVbLdvG"
 
 NIFTY_SYMBOL = "NSE_INDEX|Nifty 50"
-CSV_FILE = "nifty_cpr_trades.csv"
 SIGNAL_COOLDOWN = 300
 
 LOT_SIZE = 75
 TAKE_PROFIT = 1500
 STOP_LOSS = 2000
 TRAILING_STOP = 500
-VOLUME_THRESHOLD = 1.2  # Volume must be 20% above average
+VOLUME_THRESHOLD = 1.00
+MIN_CPR_DISTANCE = 10
 # =======================================================
 
 last_signal_time = None
 current_expiry_date = None
 contracts_cache = []
 open_position = None
+previous_oi_data = {"ce": 0, "pe": 0, "timestamp": None}
+
+# Session variables
+session_id = None
+session_dir = None
+trade_dir = None
+log_dir = None
+terminal_dir = None
+csv_file_path = None
+logger = None
+
+
+# ==================== FOLDER STRUCTURE SETUP ====================
+
+class TeeLogger:
+    """Dual output: Console + File for terminal logs"""
+    def __init__(self, terminal_file):
+        self.terminal = sys.stdout
+        self.log_file = open(terminal_file, 'a', encoding='utf-8')
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+    
+    def close(self):
+        self.log_file.close()
+
+
+def create_session_folders():
+    """Create timestamped folder structure for this bot session"""
+    global session_id, session_dir, trade_dir, log_dir, terminal_dir, csv_file_path
+    
+    session_id = dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+    
+    base_dir = "nifty_bot_runs"
+    session_dir = os.path.join(base_dir, f"run_{session_id}")
+    trade_dir = os.path.join(session_dir, "trade_details")
+    log_dir = os.path.join(session_dir, "log_reports")
+    terminal_dir = os.path.join(session_dir, "terminal_logs")
+    
+    os.makedirs(trade_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(terminal_dir, exist_ok=True)
+    
+    csv_file_path = os.path.join(trade_dir, "trades.csv")
+    
+    print(f"\n{'=' * 80}")
+    print(f"📁 SESSION FOLDER CREATED")
+    print(f"{'=' * 80}")
+    print(f"Session ID: {session_id}")
+    print(f"Location: {session_dir}")
+    print(f"  └── trade_details/trades.csv")
+    print(f"  └── log_reports/bot.log")
+    print(f"  └── terminal_logs/terminal.txt")
+    print(f"{'=' * 80}\n")
+    
+    return session_dir
+
+
+def setup_logging():
+    """Setup structured logging to log_reports/bot.log"""
+    global logger
+    
+    logger = logging.getLogger('NiftyBot')
+    logger.setLevel(logging.DEBUG)
+    
+    log_file = os.path.join(log_dir, "bot.log")
+    
+    file_handler = RotatingFileHandler(
+        log_file, 
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(logging.DEBUG)
+    
+    formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(funcName)-25s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    
+    logger.addHandler(file_handler)
+    
+    logger.info("=" * 80)
+    logger.info("BOT SESSION STARTED")
+    logger.info(f"Session ID: {session_id}")
+    logger.info(f"Lot Size: {LOT_SIZE}")
+    logger.info(f"Take Profit: ₹{TAKE_PROFIT}")
+    logger.info(f"Stop Loss: ₹{STOP_LOSS}")
+    logger.info(f"Trailing Stop: ₹{TRAILING_STOP}")
+    logger.info("=" * 80)
+
+
+def setup_terminal_logging():
+    """Redirect stdout to both console and terminal_logs/terminal.txt"""
+    terminal_file = os.path.join(terminal_dir, "terminal.txt")
+    sys.stdout = TeeLogger(terminal_file)
 
 
 # ==================== POSITION TRACKING ====================
@@ -48,6 +156,8 @@ class Position:
         self.highest_pnl = 0
         self.trailing_stop_active = False
         self.trailing_stop_price = None
+        
+        logger.info(f"NEW POSITION OPENED: {signal_type} {strike} @ ₹{entry_premium}")
     
     def calculate_pnl(self, current_premium):
         premium_diff = current_premium - self.entry_premium
@@ -62,6 +172,7 @@ class Position:
         pnl, premium_diff = self.calculate_pnl(current_premium)
         
         if pnl <= -STOP_LOSS:
+            logger.warning(f"STOP LOSS HIT: P&L = ₹{pnl:.2f}")
             return True, f"STOP LOSS (Loss: ₹{abs(pnl):.2f})", pnl, premium_diff
         
         if pnl >= TAKE_PROFIT:
@@ -69,15 +180,18 @@ class Position:
                 self.trailing_stop_active = True
                 self.trailing_stop_price = current_premium - (TRAILING_STOP / self.lot_size)
                 print(f"  🎯 Take Profit reached! Trailing stop: ₹{self.trailing_stop_price:.2f}")
+                logger.info(f"TRAILING STOP ACTIVATED at ₹{self.trailing_stop_price:.2f}")
         
         if self.trailing_stop_active:
             if current_premium <= self.trailing_stop_price:
+                logger.info(f"TRAILING STOP TRIGGERED: P&L = ₹{pnl:.2f}")
                 return True, f"TRAILING STOP (Profit: ₹{pnl:.2f})", pnl, premium_diff
             
             new_trailing_stop = current_premium - (TRAILING_STOP / self.lot_size)
             if new_trailing_stop > self.trailing_stop_price:
                 self.trailing_stop_price = new_trailing_stop
                 print(f"  📈 Trailing stop updated: ₹{self.trailing_stop_price:.2f}")
+                logger.debug(f"Trailing stop updated to ₹{self.trailing_stop_price:.2f}")
         
         return False, None, pnl, premium_diff
 
@@ -90,7 +204,7 @@ def send_discord_alert(title, description, color=0x00ff00, fields=None):
         "description": description,
         "color": color,
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "footer": {"text": f"CPR+VWAP+Vol+OI | Lot: {LOT_SIZE}"}
+        "footer": {"text": f"Session: {session_id} | Lot: {LOT_SIZE}"}
     }
     
     if fields:
@@ -100,8 +214,10 @@ def send_discord_alert(title, description, color=0x00ff00, fields=None):
         response = requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]}, timeout=10)
         if response.status_code == 204:
             print("  ✅ Discord alert sent")
+            logger.info(f"Discord alert sent: {title}")
     except Exception as e:
         print(f"  ⚠️  Discord error: {e}")
+        logger.error(f"Discord error: {e}")
 
 
 # ==================== TOKEN VALIDATION ====================
@@ -115,13 +231,17 @@ def validate_token():
         
         if response.status_code == 200:
             profile = response.json()
-            print(f"✅ Token Valid | User: {profile.get('data', {}).get('user_name', 'N/A')}")
+            username = profile.get('data', {}).get('user_name', 'N/A')
+            print(f"✅ Token Valid | User: {username}")
+            logger.info(f"Token validated successfully for user: {username}")
             return True
         else:
-            print(f"❌ TOKEN EXPIRED")
+            print(f"❌ TOKEN EXPIRED (Status: {response.status_code})")
+            logger.error(f"Token validation failed with status: {response.status_code}")
             return False
     except Exception as e:
         print(f"❌ Token validation error: {e}")
+        logger.error(f"Token validation exception: {e}")
         return False
 
 
@@ -143,6 +263,7 @@ def get_next_tuesday_expiry():
     
     expiry_date = expiry.strftime('%Y-%m-%d')
     print(f"  ✅ Next Expiry: {expiry_date} ({expiry.strftime('%A')})")
+    logger.info(f"Next expiry date calculated: {expiry_date}")
     return expiry_date
 
 
@@ -165,6 +286,8 @@ def get_option_instruments():
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
+            print(f"  ⚠️  API returned status {response.status_code}")
+            logger.warning(f"Option instruments API returned status {response.status_code}")
             return []
         
         data = response.json()
@@ -182,12 +305,15 @@ def get_option_instruments():
                     nearest_expiry = expiries[0]
                     current_expiry_date = nearest_expiry
                     contracts_cache = [c for c in all_contracts if c["expiry"] == nearest_expiry]
+                    logger.info(f"Using nearest expiry: {nearest_expiry}")
             else:
                 return []
         else:
             contracts_cache = data["data"]
         
         if len(contracts_cache) == 0:
+            print("  ⚠️  No contracts found")
+            logger.warning("No option contracts found")
             return []
         
         spot_price = get_spot_price()
@@ -196,12 +322,14 @@ def get_option_instruments():
             print(f"  ✅ Nifty Spot: {spot_price:.2f}")
             filtered = [c["instrument_key"] for c in contracts_cache if abs(c["strike_price"] - spot_price) <= 500]
             print(f"  ✅ Selected {len(filtered)} contracts")
+            logger.info(f"Fetched {len(filtered)} option contracts near spot price {spot_price:.2f}")
             return filtered
         else:
             return [c["instrument_key"] for c in contracts_cache[:50]]
         
     except Exception as e:
         print(f"  ❌ Exception: {e}")
+        logger.error(f"Exception in get_option_instruments: {e}")
         return []
 
 
@@ -216,18 +344,23 @@ def get_spot_price():
         if response.status_code == 200:
             data = response.json()
             if "data" in data and NIFTY_SYMBOL in data["data"]:
-                return data["data"][NIFTY_SYMBOL]["last_price"]
+                spot = data["data"][NIFTY_SYMBOL]["last_price"]
+                logger.debug(f"Spot price fetched: {spot:.2f}")
+                return spot
         
         return None
-    except:
+    except Exception as e:
+        logger.error(f"Spot price fetch error: {e}")
         return None
 
 
-# ==================== GET LIVE OI ====================
+# ==================== GET LIVE OI WITH CHANGE TRACKING ====================
 
 def get_live_oi_from_quotes(instrument_keys):
+    global previous_oi_data
+    
     if not instrument_keys:
-        return None, 0, 0
+        return None, 0, 0, 0, 0
     
     ce_oi_total = 0
     pe_oi_total = 0
@@ -260,21 +393,45 @@ def get_live_oi_from_quotes(instrument_keys):
                         elif "PE" in instrument_key:
                             pe_oi_total += oi_value
         
-        except:
+        except Exception as e:
+            logger.error(f"OI fetch error in batch: {e}")
             continue
     
     if ce_oi_total == 0 and pe_oi_total == 0:
-        return None, 0, 0
+        return None, 0, 0, 0, 0
     
-    if pe_oi_total > ce_oi_total * 1.05:
+    ce_oi_change = ce_oi_total - previous_oi_data["ce"]
+    pe_oi_change = pe_oi_total - previous_oi_data["pe"]
+    
+    if ce_oi_total > pe_oi_total * 1.05:
         trend = "Bullish"
-    elif ce_oi_total > pe_oi_total * 1.05:
+    elif pe_oi_total > ce_oi_total * 1.05:
         trend = "Bearish"
     else:
         trend = "Sideways"
     
-    print(f"  ✅ Live OI: CE={ce_oi_total:,.0f} | PE={pe_oi_total:,.0f} | {trend}")
-    return trend, ce_oi_total, pe_oi_total
+    oi_action = "Neutral"
+    if ce_oi_change > 0 and pe_oi_change > 0:
+        oi_action = "Both Building"
+    elif ce_oi_change > pe_oi_change * 2:
+        oi_action = "CE Buildup"
+    elif pe_oi_change > ce_oi_change * 2:
+        oi_action = "PE Buildup"
+    elif ce_oi_change < 0 and pe_oi_change < 0:
+        oi_action = "Both Unwinding"
+    
+    print(f"  ✅ Live OI: CE={ce_oi_total:,.0f} ({ce_oi_change:+,.0f}) | PE={pe_oi_total:,.0f} ({pe_oi_change:+,.0f})")
+    print(f"  📊 OI Trend: {trend} | Action: {oi_action}")
+    
+    logger.info(f"OI Data - CE: {ce_oi_total:,.0f} ({ce_oi_change:+,.0f}), PE: {pe_oi_total:,.0f} ({pe_oi_change:+,.0f}), Trend: {trend}, Action: {oi_action}")
+    
+    previous_oi_data = {
+        "ce": ce_oi_total,
+        "pe": pe_oi_total,
+        "timestamp": dt.datetime.now()
+    }
+    
+    return trend, ce_oi_total, pe_oi_total, ce_oi_change, pe_oi_change
 
 
 # ==================== LIVE DATA FETCHING ====================
@@ -292,16 +449,20 @@ def get_live_candles(symbol):
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
+            print(f"  ⚠️  Candles API returned {response.status_code}")
+            logger.warning(f"Candles API returned status {response.status_code}")
             return None
         
         data = response.json()
         
         if "data" not in data or "candles" not in data["data"]:
+            print("  ⚠️  No candle data in response")
             return None
         
         candles = data["data"]["candles"]
         
         if len(candles) == 0:
+            print("  ⚠️  Empty candles list")
             return None
         
         df = pd.DataFrame(candles, columns=["time","open","high","low","close","volume","oi"])
@@ -320,17 +481,18 @@ def get_live_candles(symbol):
         df_5min.reset_index(inplace=True)
         
         print(f"  ✅ Candles: {len(candles)} 1-min → {len(df_5min)} 5-min")
+        logger.debug(f"Candles resampled: {len(candles)} 1-min → {len(df_5min)} 5-min")
         return df_5min
         
     except Exception as e:
         print(f"  ❌ Candle error: {e}")
+        logger.error(f"Candle fetch error: {e}")
         return None
 
 
 # ==================== CPR CALCULATION ====================
 
 def calculate_cpr_from_previous_day():
-    """Calculate CPR using previous day's High, Low, Close"""
     try:
         today = dt.datetime.now()
         
@@ -364,18 +526,20 @@ def calculate_cpr_from_previous_day():
                 tc = (pivot - bc) + pivot
                 
                 print(f"  ✅ CPR from {prev_date}: TC={tc:.2f} | Pivot={pivot:.2f} | BC={bc:.2f}")
+                logger.info(f"CPR calculated from {prev_date}: TC={tc:.2f}, Pivot={pivot:.2f}, BC={bc:.2f}")
                 return tc, pivot, bc
         
         print(f"  ⚠️  Could not fetch previous day data")
+        logger.warning(f"Could not fetch previous day data for CPR")
         return None, None, None
         
     except Exception as e:
         print(f"  ⚠️  CPR calculation error: {e}")
+        logger.error(f"CPR calculation error: {e}")
         return None, None, None
 
 
 def calculate_cpr_from_session(df):
-    """Fallback: Calculate CPR from current session data"""
     if len(df) < 20:
         prev_high = df['high'].max()
         prev_low = df['low'].min()
@@ -391,20 +555,20 @@ def calculate_cpr_from_session(df):
     tc = (pivot - bc) + pivot
     
     print(f"  ✅ Session CPR: TC={tc:.2f} | Pivot={pivot:.2f} | BC={bc:.2f}")
+    logger.info(f"Session CPR calculated: TC={tc:.2f}, Pivot={pivot:.2f}, BC={bc:.2f}")
     return tc, pivot, bc
 
 
 # ==================== INDICATORS ====================
 
 def calculate_indicators(df):
-    """Calculate VWAP and Volume Analysis"""
     df["TP"] = (df["high"] + df["low"] + df["close"]) / 3
     df["TPV"] = df["TP"] * df["volume"]
     df["Cumulative_TPV"] = df["TPV"].cumsum()
     df["Cumulative_Volume"] = df["volume"].cumsum()
     df["VWAP"] = df["Cumulative_TPV"] / df["Cumulative_Volume"]
     
-    df["Avg_Volume"] = df["volume"].rolling(window=20, min_periods=1).mean()
+    df["Avg_Volume"] = df["volume"].rolling(window=10, min_periods=1).mean()
     df["Volume_Ratio"] = df["volume"] / df["Avg_Volume"]
     
     df["VWAP"] = df["VWAP"].fillna(df["close"])
@@ -435,7 +599,8 @@ def get_current_premium(instrument_key):
                     return premium
         
         return None
-    except:
+    except Exception as e:
+        logger.error(f"Premium fetch error: {e}")
         return None
 
 
@@ -456,49 +621,58 @@ def find_atm_strike_with_live_premium(spot_price, option_type):
         
         if premium:
             print(f"  ✅ Premium: {option_type} {atm_strike} = ₹{premium}")
+            logger.info(f"ATM Strike found: {option_type} {atm_strike} @ ₹{premium}")
             return atm_strike, premium, instrument_key
         
         return atm_strike, 0, instrument_key
         
-    except:
+    except Exception as e:
+        logger.error(f"Strike finding error: {e}")
         return None, None, None
 
 
 # ==================== SIGNAL LOGIC ====================
 
-def evaluate_signal(spot, tc, bc, vwap, volume_ratio, oi_trend):
-    """Evaluate CPR + VWAP + Volume + OI signals"""
+def evaluate_signal(spot, tc, bc, vwap, volume_ratio, oi_trend, ce_oi_change, pe_oi_change):
     if oi_trend is None or tc is None or bc is None:
         return None, None
+    
+    distance_from_tc = abs(spot - tc)
+    distance_from_bc = abs(spot - bc)
     
     conditions = {
         "CE": {
             "price_above_tc": spot > tc,
+            "sufficient_distance": distance_from_tc >= MIN_CPR_DISTANCE,
             "price_above_vwap": spot > vwap,
             "volume_high": volume_ratio > VOLUME_THRESHOLD,
-            "oi_bullish": oi_trend == "Bullish"
+            "oi_bullish": oi_trend == "Bullish",
+            "ce_oi_building": ce_oi_change > 0
         },
         "PE": {
             "price_below_bc": spot < bc,
+            "sufficient_distance": distance_from_bc >= MIN_CPR_DISTANCE,
             "price_below_vwap": spot < vwap,
             "volume_high": volume_ratio > VOLUME_THRESHOLD,
-            "oi_bearish": oi_trend == "Bearish"
+            "oi_bearish": oi_trend == "Bearish",
+            "pe_oi_building": pe_oi_change > 0
         }
     }
     
     if all(conditions["CE"].values()):
+        logger.info("SIGNAL GENERATED: BUY CE - All conditions met")
         return "BUY CE", conditions
     
     if all(conditions["PE"].values()):
+        logger.info("SIGNAL GENERATED: BUY PE - All conditions met")
         return "BUY PE", conditions
     
     return None, conditions
 
 
-def print_signal_evaluation(conditions, tc, bc):
-    """Print detailed signal evaluation"""
+def print_signal_evaluation(conditions, tc, bc, spot):
     print(f"\n🔍 SIGNAL EVALUATION (All ✅ required for trade)")
-    print("-" * 85)
+    print("-" * 95)
     
     ce = conditions["CE"]
     pe = conditions["PE"]
@@ -506,21 +680,28 @@ def print_signal_evaluation(conditions, tc, bc):
     ce_result = "🔔 TRIGGER!" if all(ce.values()) else "❌ NO"
     pe_result = "🔔 TRIGGER!" if all(pe.values()) else "❌ NO"
     
+    dist_tc = abs(spot - tc)
+    dist_bc = abs(spot - bc)
+    
     print(f"  CALL: {'✅' if ce['price_above_tc'] else '❌'} Above TC({tc:.2f})  "
-          f"{'✅' if ce['price_above_vwap'] else '❌'} Above VWAP  "
-          f"{'✅' if ce['volume_high'] else '❌'} High Vol  "
-          f"{'✅' if ce['oi_bullish'] else '❌'} OI-Bull  →  {ce_result}")
+          f"{'✅' if ce['sufficient_distance'] else '❌'} Dist:{dist_tc:.1f}  "
+          f"{'✅' if ce['price_above_vwap'] else '❌'} VWAP  "
+          f"{'✅' if ce['volume_high'] else '❌'} Vol  "
+          f"{'✅' if ce['oi_bullish'] else '❌'} OI-Bull  "
+          f"{'✅' if ce['ce_oi_building'] else '❌'} CE-Build  →  {ce_result}")
     
     print(f"  PUT:  {'✅' if pe['price_below_bc'] else '❌'} Below BC({bc:.2f})  "
-          f"{'✅' if pe['price_below_vwap'] else '❌'} Below VWAP  "
-          f"{'✅' if pe['volume_high'] else '❌'} High Vol  "
-          f"{'✅' if pe['oi_bearish'] else '❌'} OI-Bear  →  {pe_result}")
+          f"{'✅' if pe['sufficient_distance'] else '❌'} Dist:{dist_bc:.1f}  "
+          f"{'✅' if pe['price_below_vwap'] else '❌'} VWAP  "
+          f"{'✅' if pe['volume_high'] else '❌'} Vol  "
+          f"{'✅' if pe['oi_bearish'] else '❌'} OI-Bear  "
+          f"{'✅' if pe['pe_oi_building'] else '❌'} PE-Build  →  {pe_result}")
 
 
 # ==================== LOGGING ====================
 
 def log_signal(timestamp, signal, strike, premium, spot, vwap, volume_ratio, tc, pivot, bc, oi_trend, exit_reason=None, pnl=None, premium_diff=None):
-    with open(CSV_FILE, "a", newline='', encoding='utf-8') as f:
+    with open(csv_file_path, "a", newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([
             timestamp, signal, strike, premium,
@@ -535,6 +716,11 @@ def log_signal(timestamp, signal, strike, premium, spot, vwap, volume_ratio, tc,
             round(pnl, 2) if pnl else "",
             round(premium_diff, 2) if premium_diff else ""
         ])
+    
+    if pnl:
+        logger.info(f"Trade logged: {signal} {strike} | Exit: {exit_reason} | P&L: ₹{pnl:.2f}")
+    else:
+        logger.info(f"Trade logged: {signal} {strike} @ ₹{premium}")
 
 
 # ==================== MAIN LOOP ====================
@@ -542,23 +728,29 @@ def log_signal(timestamp, signal, strike, premium, spot, vwap, volume_ratio, tc,
 def main():
     global last_signal_time, open_position
     
+    create_session_folders()
+    setup_logging()
+    setup_terminal_logging()
+    
     print("\n" + "=" * 80)
-    print("🚀 NIFTY OPTIONS BOT - CPR + VWAP + VOLUME + OI STRATEGY")
+    print("🚀 NIFTY OPTIONS BOT - FIXED VERSION V4")
     print("=" * 80)
     
     if not validate_token():
         print("\n❌ Invalid token. Exiting...")
+        logger.critical("Bot stopped: Invalid token")
         return
     
-    print(f"✅ Strategy: CPR + VWAP + Volume + OI")
+    print(f"✅ Strategy: CPR + VWAP + Volume + OI (CORRECTED)")
     print(f"✅ Lot Size: {LOT_SIZE}")
     print(f"✅ Take Profit: ₹{TAKE_PROFIT}")
     print(f"✅ Stop Loss: ₹{STOP_LOSS}")
     print(f"✅ Trailing Stop: ₹{TRAILING_STOP}")
     print(f"✅ Volume Threshold: {VOLUME_THRESHOLD}x")
+    print(f"✅ Min CPR Distance: {MIN_CPR_DISTANCE} points")
     print("=" * 80 + "\n")
     
-    with open(CSV_FILE, "w", newline='', encoding='utf-8') as f:
+    with open(csv_file_path, "w", newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow([
             "DateTime","Signal","Strike","Premium","Spot","VWAP","Volume_Ratio",
@@ -570,6 +762,7 @@ def main():
     
     if len(option_instruments) == 0:
         print("\n❌ No option instruments found")
+        logger.critical("Bot stopped: No option instruments found")
         return
     
     print(f"\n✅ Ready | Expiry: {current_expiry_date}\n")
@@ -596,6 +789,7 @@ def main():
             
             if (now.hour == 15 and now.minute > 30) or now.hour > 15:
                 print("⏸  Market Closed (Closes 3:30 PM)")
+                logger.info("Market closed")
                 
                 if open_position:
                     current_premium = get_current_premium(open_position.instrument_key)
@@ -671,7 +865,7 @@ def main():
             vwap = latest["VWAP"]
             volume_ratio = latest["Volume_Ratio"]
             
-            oi_trend, oi_ce, oi_pe = get_live_oi_from_quotes(option_instruments)
+            oi_trend, oi_ce, oi_pe, ce_oi_change, pe_oi_change = get_live_oi_from_quotes(option_instruments)
             
             if oi_trend is None:
                 print("⏳ OI unavailable")
@@ -687,9 +881,9 @@ def main():
                 time.sleep(60)
                 continue
             
-            signal, conditions = evaluate_signal(spot, tc, bc, vwap, volume_ratio, oi_trend)
+            signal, conditions = evaluate_signal(spot, tc, bc, vwap, volume_ratio, oi_trend, ce_oi_change, pe_oi_change)
             
-            print_signal_evaluation(conditions, tc, bc)
+            print_signal_evaluation(conditions, tc, bc, spot)
             
             if signal:
                 option_type = "CE" if signal == "BUY CE" else "PE"
@@ -718,7 +912,15 @@ def main():
             time.sleep(60)
     
     except KeyboardInterrupt:
-        print(f"\n\n⏹  STOPPED | Trades: {CSV_FILE}")
+        print(f"\n\n⏹  STOPPED | Logs saved in: {session_dir}")
+        logger.info("Bot stopped by user (KeyboardInterrupt)")
+    except Exception as e:
+        print(f"\n\n❌ CRITICAL ERROR: {e}")
+        logger.critical(f"Bot crashed with exception: {e}", exc_info=True)
+        send_discord_alert("❌ Bot Crashed", str(e), 0xff0000)
+    finally:
+        if hasattr(sys.stdout, 'close'):
+            sys.stdout.close()
 
 
 if __name__ == "__main__":
