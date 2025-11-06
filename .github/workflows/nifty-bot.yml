@@ -1,35 +1,58 @@
 name: Nifty Options Trading Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # Manual trigger
 
 jobs:
   trade:
     runs-on: ubuntu-latest
     
     steps:
+    # Checkout your repo
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
+    # Set up Python 3.11
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
+    # Install dependencies
     - name: Install dependencies
       run: pip install -r requirements.txt
     
+    # Display IST time
     - name: Display IST time
-      run: echo "IST Time:" && TZ='Asia/Kolkata' date
-    
-    - name: Run trading bot
-      run: python main.py
-      timeout-minutes: 390
-    
-    - name: Upload trade logs
+      run: |
+        echo "🕒 Current IST Time:"
+        TZ='Asia/Kolkata' date
+
+    # Run your trading bot in IST timezone and unbuffered mode
+    - name: Run trading bot (IST timezone)
+      env:
+        PYTHONUNBUFFERED: '1'
+        TZ: 'Asia/Kolkata'          # ✅ Force entire job to use IST
+      run: |
+        echo "✅ Timezone set to: $TZ"
+        date
+        python -u main.py
+      timeout-minutes: 390          # ~6.5 hours = 9:15 AM to 3:45 PM IST
+
+    # Upload all session logs and trades (always, even if failed)
+    - name: Upload run artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: trade-logs-${{ github.run_number }}
-        path: nifty_trades.csv
+        name: nifty-bot-run-${{ github.run_number }}
+        path: nifty_bot_runs/**
+        retention-days: 30
+
+    # Upload main bot.log separately for quick inspection
+    - name: Upload bot.log only
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bot-log-${{ github.run_number }}
+        path: nifty_bot_runs/**/log_reports/bot.log
         retention-days: 30
