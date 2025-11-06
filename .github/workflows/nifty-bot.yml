@@ -8,13 +8,13 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    # Checkout your code
+    # Checkout your repo
     - name: Checkout code
-      uses: actions/checkout@v4   # ✅ Updated version
+      uses: actions/checkout@v4
     
-    # Set up Python
+    # Set up Python 3.11
     - name: Set up Python
-      uses: actions/setup-python@v5   # ✅ Updated version
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -22,30 +22,34 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements.txt
     
-    # Display current time in IST
+    # Display IST time
     - name: Display IST time
       run: |
-        echo "🕒 IST Time:"
+        echo "🕒 Current IST Time:"
         TZ='Asia/Kolkata' date
-    
-    # Run your trading bot in unbuffered mode so all logs show up
-    - name: Run trading bot (unbuffered mode)
-      run: python -u main.py    # ✅ '-u' ensures unbuffered stdout for live logs
+
+    # Run your trading bot in IST timezone and unbuffered mode
+    - name: Run trading bot (IST timezone)
       env:
         PYTHONUNBUFFERED: '1'
-      timeout-minutes: 390      # ~6.5 hours (market hours)
-    
-    # Upload full logs + trades after completion or failure
+        TZ: 'Asia/Kolkata'          # ✅ Force entire job to use IST
+      run: |
+        echo "✅ Timezone set to: $TZ"
+        date
+        python -u main.py
+      timeout-minutes: 390          # ~6.5 hours = 9:15 AM to 3:45 PM IST
+
+    # Upload all session logs and trades (always, even if failed)
     - name: Upload run artifacts
-      if: always()              # ✅ ensures even on failure logs get uploaded
-      uses: actions/upload-artifact@v4   # ✅ Latest version
+      if: always()
+      uses: actions/upload-artifact@v4
       with:
         name: nifty-bot-run-${{ github.run_number }}
-        path: nifty_bot_runs/**           # ✅ Uploads all folders & log files
-        retention-days: 30                # Keep logs for 30 days
+        path: nifty_bot_runs/**
+        retention-days: 30
 
-    # Optional: Also upload bot.log separately for quick access
-    - name: Upload main bot.log
+    # Upload main bot.log separately for quick inspection
+    - name: Upload bot.log only
       if: always()
       uses: actions/upload-artifact@v4
       with:
