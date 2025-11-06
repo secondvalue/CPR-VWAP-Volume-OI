@@ -1,11 +1,11 @@
 """
-NIFTY 50 OPTIONS BOT - FIXED VERSION V4
-✅ FIXED: OI Logic (CE high = Bullish, PE high = Bearish)
-✅ FIXED: OI Change Tracking (Buildup vs Unwinding)
-✅ FIXED: Volume Window Optimization
-✅ FIXED: Signal Validation with Distance Check
-✅ Enhanced Error Handling
-✅ NEW: Timestamped Folder Structure for Logs & Trades
+NIFTY 50 OPTIONS BOT - CORRECTED VERSION V5
+✅ FIXED: OI Logic (CE high = BEARISH, PE high = BULLISH)
+✅ FIXED: Signal conditions aligned with proper OI interpretation
+✅ FIXED: OI Change initialization to avoid false first signals
+✅ FIXED: Relaxed OI change requirements (>= 0 instead of > 0)
+✅ Enhanced Error Handling claude
+✅ Timestamped Folder Structure for Logs & Trades
 """
 
 import requests
@@ -20,7 +20,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 # ==================== CONFIGURATION ====================
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI1NUJBOVgiLCJqdGkiOiI2OTA5NzUxMGM5YzYzZDU4ZWViZjgwZDkiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2MjIyNzQ3MiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzYyMjkzNjAwfQ.ZqO_xW_7ShNalpapEdzocZy6sdRlqZdeLPUhTWXDYG8"
+ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI1NUJBOVgiLCJqdGkiOiI2OTBjMTY3YTE0MmVhMzBjZDViYzI2MGIiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2MjM5OTg2NiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzYyNDY2NDAwfQ.fJuD3SwFjuP6bEqmJzPTimFVg_klQRwsjSPAKnNzHso"
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1412386951474057299/Jgft_nxzGxcfWOhoLbSWMde-_bwapvqx8l3VQGQwEoR7_8n4b9Q9zN242kMoXsVbLdvG"
 
 NIFTY_SYMBOL = "NSE_INDEX|Nifty 50"
@@ -30,7 +30,7 @@ LOT_SIZE = 75
 TAKE_PROFIT = 1500
 STOP_LOSS = 2000
 TRAILING_STOP = 500
-VOLUME_THRESHOLD = 1.00
+VOLUME_THRESHOLD = 0.95
 MIN_CPR_DISTANCE = 10
 # =======================================================
 
@@ -354,7 +354,7 @@ def get_spot_price():
         return None
 
 
-# ==================== GET LIVE OI WITH CHANGE TRACKING ====================
+# ==================== CORRECTED OI LOGIC WITH INITIALIZATION ====================
 
 def get_live_oi_from_quotes(instrument_keys):
     global previous_oi_data
@@ -400,23 +400,39 @@ def get_live_oi_from_quotes(instrument_keys):
     if ce_oi_total == 0 and pe_oi_total == 0:
         return None, 0, 0, 0, 0
     
+    # ✅ FIX: Initialize OI tracking on first run to avoid false signals
+    if previous_oi_data["timestamp"] is None:
+        previous_oi_data = {
+            "ce": ce_oi_total,
+            "pe": pe_oi_total,
+            "timestamp": dt.datetime.now()
+        }
+        print(f"  🔄 First OI snapshot: CE={ce_oi_total:,.0f} | PE={pe_oi_total:,.0f}")
+        print(f"  ⏳ Waiting for next check to calculate OI change...")
+        logger.info(f"OI tracking initialized - CE: {ce_oi_total:,.0f}, PE: {pe_oi_total:,.0f}")
+        return "Neutral", ce_oi_total, pe_oi_total, 0, 0
+    
     ce_oi_change = ce_oi_total - previous_oi_data["ce"]
     pe_oi_change = pe_oi_total - previous_oi_data["pe"]
     
-    if ce_oi_total > pe_oi_total * 1.05:
-        trend = "Bullish"
-    elif pe_oi_total > ce_oi_total * 1.05:
-        trend = "Bearish"
+    # ✅ CORRECTED OI LOGIC:
+    # High CE OI = More Call Writers = Bearish (Resistance)
+    # High PE OI = More Put Writers = Bullish (Support)
+    if ce_oi_total > pe_oi_total * 1.03:
+        trend = "Bearish"  # CE dominance = Resistance
+    elif pe_oi_total > ce_oi_total * 1.03:
+        trend = "Bullish"  # PE dominance = Support
     else:
         trend = "Sideways"
     
+    # OI Action classification
     oi_action = "Neutral"
     if ce_oi_change > 0 and pe_oi_change > 0:
         oi_action = "Both Building"
     elif ce_oi_change > pe_oi_change * 2:
-        oi_action = "CE Buildup"
+        oi_action = "CE Buildup (Resistance)"
     elif pe_oi_change > ce_oi_change * 2:
-        oi_action = "PE Buildup"
+        oi_action = "PE Buildup (Support)"
     elif ce_oi_change < 0 and pe_oi_change < 0:
         oi_action = "Both Unwinding"
     
@@ -568,7 +584,7 @@ def calculate_indicators(df):
     df["Cumulative_Volume"] = df["volume"].cumsum()
     df["VWAP"] = df["Cumulative_TPV"] / df["Cumulative_Volume"]
     
-    df["Avg_Volume"] = df["volume"].rolling(window=10, min_periods=1).mean()
+    df["Avg_Volume"] = df["volume"].rolling(window=10, min_periods=3).mean()
     df["Volume_Ratio"] = df["volume"] / df["Avg_Volume"]
     
     df["VWAP"] = df["VWAP"].fillna(df["close"])
@@ -619,7 +635,7 @@ def find_atm_strike_with_live_premium(spot_price, option_type):
         
         premium = get_current_premium(instrument_key)
         
-        if premium:
+        if premium and premium > 0:
             print(f"  ✅ Premium: {option_type} {atm_strike} = ₹{premium}")
             logger.info(f"ATM Strike found: {option_type} {atm_strike} @ ₹{premium}")
             return atm_strike, premium, instrument_key
@@ -631,7 +647,7 @@ def find_atm_strike_with_live_premium(spot_price, option_type):
         return None, None, None
 
 
-# ==================== SIGNAL LOGIC ====================
+# ==================== CORRECTED SIGNAL LOGIC ====================
 
 def evaluate_signal(spot, tc, bc, vwap, volume_ratio, oi_trend, ce_oi_change, pe_oi_change):
     if oi_trend is None or tc is None or bc is None:
@@ -640,22 +656,25 @@ def evaluate_signal(spot, tc, bc, vwap, volume_ratio, oi_trend, ce_oi_change, pe
     distance_from_tc = abs(spot - tc)
     distance_from_bc = abs(spot - bc)
     
+    # ✅ CORRECTED SIGNAL CONDITIONS:
+    # BUY CE: Need bullish support (High PE OI)
+    # BUY PE: Need bearish resistance (High CE OI)
     conditions = {
         "CE": {
             "price_above_tc": spot > tc,
             "sufficient_distance": distance_from_tc >= MIN_CPR_DISTANCE,
             "price_above_vwap": spot > vwap,
             "volume_high": volume_ratio > VOLUME_THRESHOLD,
-            "oi_bullish": oi_trend == "Bullish",
-            "ce_oi_building": ce_oi_change > 0
+            "oi_bullish": oi_trend == "Bullish",      # ✅ Need PE OI support
+            "pe_oi_building": pe_oi_change >= 0        # ✅ PE buildup = support strengthening
         },
         "PE": {
             "price_below_bc": spot < bc,
             "sufficient_distance": distance_from_bc >= MIN_CPR_DISTANCE,
             "price_below_vwap": spot < vwap,
             "volume_high": volume_ratio > VOLUME_THRESHOLD,
-            "oi_bearish": oi_trend == "Bearish",
-            "pe_oi_building": pe_oi_change > 0
+            "oi_bearish": oi_trend == "Bearish",      # ✅ Need CE OI resistance
+            "ce_oi_building": ce_oi_change >= 0        # ✅ CE buildup = resistance strengthening
         }
     }
     
@@ -687,15 +706,15 @@ def print_signal_evaluation(conditions, tc, bc, spot):
           f"{'✅' if ce['sufficient_distance'] else '❌'} Dist:{dist_tc:.1f}  "
           f"{'✅' if ce['price_above_vwap'] else '❌'} VWAP  "
           f"{'✅' if ce['volume_high'] else '❌'} Vol  "
-          f"{'✅' if ce['oi_bullish'] else '❌'} OI-Bull  "
-          f"{'✅' if ce['ce_oi_building'] else '❌'} CE-Build  →  {ce_result}")
+          f"{'✅' if ce['oi_bullish'] else '❌'} OI-Support  "
+          f"{'✅' if ce['pe_oi_building'] else '❌'} PE-Build  →  {ce_result}")
     
     print(f"  PUT:  {'✅' if pe['price_below_bc'] else '❌'} Below BC({bc:.2f})  "
           f"{'✅' if pe['sufficient_distance'] else '❌'} Dist:{dist_bc:.1f}  "
           f"{'✅' if pe['price_below_vwap'] else '❌'} VWAP  "
           f"{'✅' if pe['volume_high'] else '❌'} Vol  "
-          f"{'✅' if pe['oi_bearish'] else '❌'} OI-Bear  "
-          f"{'✅' if pe['pe_oi_building'] else '❌'} PE-Build  →  {pe_result}")
+          f"{'✅' if pe['oi_bearish'] else '❌'} OI-Resist  "
+          f"{'✅' if pe['ce_oi_building'] else '❌'} CE-Build  →  {pe_result}")
 
 
 # ==================== LOGGING ====================
@@ -733,7 +752,9 @@ def main():
     setup_terminal_logging()
     
     print("\n" + "=" * 80)
-    print("🚀 NIFTY OPTIONS BOT - FIXED VERSION V4")
+    print("🚀 NIFTY OPTIONS BOT - CORRECTED VERSION V5")
+    print("=" * 80)
+    print("✅ FIXED: OI Logic (CE High = BEARISH | PE High = BULLISH)")
     print("=" * 80)
     
     if not validate_token():
@@ -748,6 +769,9 @@ def main():
     print(f"✅ Trailing Stop: ₹{TRAILING_STOP}")
     print(f"✅ Volume Threshold: {VOLUME_THRESHOLD}x")
     print(f"✅ Min CPR Distance: {MIN_CPR_DISTANCE} points")
+    print(f"\n📚 OI LOGIC:")
+    print(f"   • High CE OI = Call Writers = BEARISH (Resistance)")
+    print(f"   • High PE OI = Put Writers = BULLISH (Support)")
     print("=" * 80 + "\n")
     
     with open(csv_file_path, "w", newline='', encoding='utf-8') as f:
@@ -872,6 +896,12 @@ def main():
                 time.sleep(60)
                 continue
             
+            # Skip signal evaluation if OI trend is Neutral (first run)
+            if oi_trend == "Neutral" and ce_oi_change == 0 and pe_oi_change == 0:
+                print("⏳ OI initialized - waiting for next check")
+                time.sleep(60)
+                continue
+            
             print(f"\n📊 Spot: {spot:.2f} | VWAP: {vwap:.2f} | Vol: {volume_ratio:.2f}x")
             print(f"📊 CPR: TC={tc:.2f} | Pivot={pivot:.2f} | BC={bc:.2f}")
             
@@ -889,7 +919,7 @@ def main():
                 option_type = "CE" if signal == "BUY CE" else "PE"
                 strike, premium, instrument_key = find_atm_strike_with_live_premium(spot, option_type)
                 
-                if strike and premium and instrument_key:
+                if strike and premium and premium > 5 and instrument_key:
                     open_position = Position(signal, strike, premium, instrument_key, timestamp_full)
                     
                     log_signal(timestamp_full, signal, strike, premium, spot, vwap, volume_ratio, tc, pivot, bc, oi_trend)
@@ -906,6 +936,9 @@ def main():
                     )
                     
                     last_signal_time = now
+                else:
+                    print(f"\n⚠️  Signal generated but premium fetch failed or invalid")
+                    logger.warning(f"Signal {signal} generated but premium invalid: {premium}")
             else:
                 print("\n⏸  NO SIGNAL - Waiting for confluence...")
             
