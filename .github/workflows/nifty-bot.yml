@@ -1,35 +1,54 @@
 name: Nifty Options Trading Bot
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # Manual trigger
 
 jobs:
   trade:
     runs-on: ubuntu-latest
     
     steps:
+    # Checkout your code
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4   # ✅ Updated version
     
+    # Set up Python
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5   # ✅ Updated version
       with:
         python-version: '3.11'
     
+    # Install dependencies
     - name: Install dependencies
       run: pip install -r requirements.txt
     
+    # Display current time in IST
     - name: Display IST time
-      run: echo "IST Time:" && TZ='Asia/Kolkata' date
+      run: |
+        echo "🕒 IST Time:"
+        TZ='Asia/Kolkata' date
     
-    - name: Run trading bot
-      run: python main.py
-      timeout-minutes: 390
+    # Run your trading bot in unbuffered mode so all logs show up
+    - name: Run trading bot (unbuffered mode)
+      run: python -u main.py    # ✅ '-u' ensures unbuffered stdout for live logs
+      env:
+        PYTHONUNBUFFERED: '1'
+      timeout-minutes: 390      # ~6.5 hours (market hours)
     
-    - name: Upload trade logs
-      if: always()
-      uses: actions/upload-artifact@v3
+    # Upload full logs + trades after completion or failure
+    - name: Upload run artifacts
+      if: always()              # ✅ ensures even on failure logs get uploaded
+      uses: actions/upload-artifact@v4   # ✅ Latest version
       with:
-        name: trade-logs-${{ github.run_number }}
-        path: nifty_trades.csv
+        name: nifty-bot-run-${{ github.run_number }}
+        path: nifty_bot_runs/**           # ✅ Uploads all folders & log files
+        retention-days: 30                # Keep logs for 30 days
+
+    # Optional: Also upload bot.log separately for quick access
+    - name: Upload main bot.log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bot-log-${{ github.run_number }}
+        path: nifty_bot_runs/**/log_reports/bot.log
         retention-days: 30
