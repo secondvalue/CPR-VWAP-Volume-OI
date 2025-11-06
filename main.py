@@ -204,7 +204,7 @@ def send_discord_alert(title, description, color=0x00ff00, fields=None):
         "description": description,
         "color": color,
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "footer": {"text": f"Session: {session_id} | Lot: {LOT_SIZE}"}
+        "footer": {"text": f"CPR | Session: {session_id} | Lot: {LOT_SIZE}"}
     }
     
     if fields:
