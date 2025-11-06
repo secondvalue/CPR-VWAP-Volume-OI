@@ -9,10 +9,10 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Updated to latest version
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5  # Updated version
       with:
         python-version: '3.11'
     
@@ -28,7 +28,7 @@ jobs:
     
     - name: Upload trade logs
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # ✅ Updated to v4
       with:
         name: trade-logs-${{ github.run_number }}
         path: nifty_trades.csv
