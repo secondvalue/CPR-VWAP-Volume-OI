@@ -20,7 +20,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 # ==================== CONFIGURATION ====================
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI1NUJBOVgiLCJqdGkiOiI2OTMyNTc0NDUwZjM4NzRkYmExNzBiZWEiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NDkwNjgyMCwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY0OTcyMDAwfQ.a0HQwOx0_Jy4Ff5FuvRA_Cr0-H8iDiiubZ6BAS1R_ys"
+ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI1NUJBOVgiLCJqdGkiOiI2OTM2NGM2ZTc0MjdkOTc2Y2E4OWE4Y2IiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NTE2NjE5MCwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY1MjMxMjAwfQ.pkNVB98ilgkZQrkDQG6mYH7qYWNBTDzR0yFNGELl-sA"
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1412386951474057299/Jgft_nxzGxcfWOhoLbSWMde-_bwapvqx8l3VQGQwEoR7_8n4b9Q9zN242kMoXsVbLdvG"
 
 NIFTY_SYMBOL = "NSE_INDEX|Nifty 50"
@@ -960,6 +960,7 @@ if __name__ == "__main__":
 
 
     main()
+
 
 
 
